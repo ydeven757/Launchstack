@@ -130,7 +130,12 @@ export async function POST(req: NextRequest) {
     });
     if (next) {
       const tenant = await prisma.tenant.findUnique({ where: { id: page.tenantId } });
-      return NextResponse.redirect(new URL(`/p/${tenant!.slug}/${next.slug}?email=${encodeURIComponent(contact.email)}`, req.url), 303);
+      // Build absolute URL from the inbound Host header (set by Caddy) so the
+      // redirect doesn't leak the internal docker bind address (0.0.0.0:3000).
+      const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || process.env.APP_BASE_DOMAIN || "";
+      const proto = req.headers.get("x-forwarded-proto") || process.env.APP_PROTOCOL || "https";
+      const base = host ? `${proto}://${host}` : req.url;
+      return NextResponse.redirect(new URL(`/p/${tenant!.slug}/${next.slug}?email=${encodeURIComponent(contact.email)}`, base), 303);
     }
   }
 

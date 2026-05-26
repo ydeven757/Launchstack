@@ -2,7 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import { cookies } from "next/headers";
 import { prisma } from "@/server/db";
 import { getCurrentUser } from "@/server/auth";
-import { ACTIVE_TENANT_COOKIE, setActiveTenant } from "@/server/tenant";
+import { ACTIVE_TENANT_COOKIE } from "@/server/tenant";
 import { Sidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/top-bar";
 
@@ -25,10 +25,12 @@ export default async function TenantLayout({
   });
   if (!membership && !user.isSuperAdmin) notFound();
 
-  // Make sure the active-tenant cookie matches this slug
+  // Make sure the active-tenant cookie matches this slug. Server Components
+  // can't write cookies, so we route through /api/tenants/select which sets
+  // the cookie on the response and redirects back here.
   const c = cookies();
   if (c.get(ACTIVE_TENANT_COOKIE)?.value !== tenant.id) {
-    await setActiveTenant(tenant.id);
+    redirect(`/api/tenants/select?id=${tenant.id}&next=${encodeURIComponent(`/t/${tenant.slug}`)}`);
   }
 
   const userTenants = await prisma.tenant.findMany({
