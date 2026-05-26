@@ -1,0 +1,41 @@
+node_modules
+.next
+out
+build
+dist
+coverage
+.vercel
+
+# env / secrets — never commit real values
+.env
+.env.local
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.*.local
+!.env.example
+!.env.production.example
+
+# Local SQLite database + journal files
+prisma/dev.db
+prisma/dev.db-journal
+prisma/dev.db-wal
+prisma/dev.db-shm
+prisma/migrations/dev.db*
+
+# IDE / OS
+*.tsbuildinfo
+.DS_Store
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

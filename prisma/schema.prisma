@@ -1,0 +1,683 @@
+// Launchstack — multi-tenant affiliate marketing platform
+// SQLite for local dev; switch `provider = "postgresql"` for production and
+// then convert the string fields back to proper Prisma enums (see comments).
+// Every tenant-owned model carries `tenantId` (the "Layer 1" of tenant isolation).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Provider is driven by the DB_PROVIDER env var at generate time.
+// Local dev:  DB_PROVIDER=sqlite      DATABASE_URL=file:./dev.db
+// Production: DB_PROVIDER=postgresql  DATABASE_URL=postgres://user:pass@host:5432/db
+//
+// The codebase is written to work with BOTH providers. Run:
+//   DB_PROVIDER=postgresql npx prisma migrate deploy
+// against a fresh Postgres DB for production. See DEPLOY.md.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Identity
+// ──────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  emailVerified DateTime?
+  name          String?
+  passwordHash  String?
+  image         String?
+  isSuperAdmin  Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  memberships   Membership[]
+  ownedTenants  Tenant[]     @relation("TenantOwner")
+  auditEntries  AuditLog[]   @relation("AuditActor")
+}
+
+// NextAuth-compatible Account (OAuth providers — kept for future expansion)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tenancy
+// ──────────────────────────────────────────────────────────────────────────────
+// TenantStatus values: "ACTIVE" | "SUSPENDED" | "ARCHIVED"
+// Plan values:         "FREE" | "STARTER" | "PRO" | "AGENCY"
+// Role values:         "OWNER" | "ADMIN" | "EDITOR" | "ANALYST"
+
+model Tenant {
+  id              String       @id @default(cuid())
+  slug            String       @unique
+  name            String
+  niche           String?
+  trafficSource   String?
+  conversionGoal  String?
+  brandPrimary    String       @default("#2563eb")
+  brandSecondary  String       @default("#0f172a")
+  brandLogo       String?
+  timezone        String       @default("UTC")
+  status          String       @default("ACTIVE")
+  plan            String       @default("FREE")
+  // Compliance / affiliate disclosure
+  disclosureText  String?
+  legalFooterHtml String?
+  onboardingDone  Boolean      @default(false)
+  ownerUserId     String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  owner           User         @relation("TenantOwner", fields: [ownerUserId], references: [id])
+  memberships     Membership[]
+  funnels         Funnel[]
+  pages           Page[]
+  contacts        Contact[]
+  tags            Tag[]
+  campaigns       Campaign[]
+  automations     Automation[]
+  templates       Template[]
+  domains         Domain[]
+  offers          Offer[]
+  events          Event[]
+  emailMessages   EmailMessage[]
+  affiliateLinks  AffiliateLink[]
+  integrations    Integration[]
+  visitors        Visitor[]
+  pageVariants    PageVariant[]
+  pageVersions    PageVersion[]
+  auditEntries    AuditLog[]
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  tenantId  String
+  role      String   @default("EDITOR")
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Funnels + Pages + Blocks
+// ──────────────────────────────────────────────────────────────────────────────
+// PageType:     "OPT_IN" | "BRIDGE" | "ADVERTORIAL" | "THANK_YOU" |
+//               "CONFIRMATION" | "BLOG_POST" | "HOME" | "REVIEW" | "CUSTOM"
+// PublishState: "DRAFT" | "PUBLISHED"
+
+model Funnel {
+  id          String       @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  slug        String
+  state       String       @default("DRAFT")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pages       Page[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model Page {
+  id              String       @id @default(cuid())
+  tenantId        String
+  funnelId        String?
+  type            String       @default("OPT_IN")
+  name            String
+  slug            String
+  position        Int          @default(0)
+  state           String       @default("DRAFT")
+  // Block tree stored as JSON for flexibility (validated by zod at API boundary)
+  blocksJson      String       @default("[]")
+  // SEO
+  seoTitle        String?
+  seoDescription  String?
+  seoImage        String?
+  // Published snapshot (rendered HTML/JSON cached at publish time)
+  publishedBlocks String?
+  publishedAt     DateTime?
+  // Compliance — pages of certain types (advertorial, review) auto-render the disclosure
+  requiresDisclosure Boolean   @default(false)
+  // A/B testing — when true, traffic is split across PageVariant rows
+  abEnabled       Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  funnel          Funnel?      @relation(fields: [funnelId], references: [id], onDelete: SetNull)
+  variants        PageVariant[]
+  versions        PageVersion[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([funnelId])
+}
+
+// A/B variants — when Page.abEnabled, traffic is split based on weight
+model PageVariant {
+  id              String   @id @default(cuid())
+  tenantId        String
+  pageId          String
+  name            String   // "A", "B", "Headline test - aggressive", ...
+  weight          Int      @default(50) // 0-100 — engine normalizes
+  blocksJson      String   @default("[]")
+  isControl       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  page            Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([pageId])
+}
+
+// Snapshot per publish for rollback + history view
+model PageVersion {
+  id          String   @id @default(cuid())
+  tenantId    String
+  pageId      String
+  blocksJson  String
+  seoTitle    String?
+  seoDescription String?
+  publishedBy String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  page        Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([pageId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Marketplace products (ClickBank + others)
+// ──────────────────────────────────────────────────────────────────────────────
+// Global catalog (no tenantId). Synced periodically from network APIs OR seeded
+// with curated picks. Operators browse + "promote into funnel" — that creates a
+// tenant-scoped Offer + AffiliateLink + duplicates a matching template.
+
+model MarketplaceProduct {
+  id              String   @id @default(cuid())
+  network         String   // "ClickBank" | "Digistore24" | "WarriorPlus" | ...
+  externalId      String   // e.g. ClickBank vendor + product ID
+  title           String
+  vendor          String?
+  niche           String?  // Health & Fitness, Personal Finance, ...
+  category        String?
+  // Numerical signals — what ClickBank calls Gravity, AvgRebill, etc.
+  gravity         Float?
+  avgPayout       Float?
+  initialPayout   Float?
+  rebillPayout   Float?
+  currency        String   @default("USD")
+  commission      Float?   // 0-100 percent
+  hopUrl          String   // The "promote me" URL template (substitute affiliate ID)
+  salesPageUrl    String?
+  description     String?
+  // The funnel archetype that fits this offer best: "lead_magnet" | "advertorial" | "review" | "webinar"
+  recommendedFunnel String?
+  // Curated tags for filter UI
+  tags            String   @default("[]")
+  // Soft-delete + freshness
+  active          Boolean  @default(true)
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([network, externalId])
+  @@index([niche])
+  @@index([gravity])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Contacts (CRM)
+// ──────────────────────────────────────────────────────────────────────────────
+// ContactStatus: "LEAD" | "ENGAGED" | "CUSTOMER" | "UNSUBSCRIBED" | "BOUNCED"
+
+model Contact {
+  id              String         @id @default(cuid())
+  tenantId        String
+  email           String
+  firstName       String?
+  lastName        String?
+  phone           String?
+  status          String         @default("LEAD")
+  customFields    String         @default("{}") // JSON
+  sourcePageId    String?
+  sourceFunnelId  String?
+  utmSource       String?
+  utmMedium       String?
+  utmCampaign     String?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactTags     ContactTag[]
+  activities      Activity[]
+  emailDeliveries EmailDelivery[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Tag {
+  id          String       @id @default(cuid())
+  tenantId    String
+  name        String
+  color       String       @default("#64748b")
+  createdAt   DateTime     @default(now())
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactTags ContactTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  tenantId  String  // denormalized for cheap tenant scoping on this join
+  createdAt DateTime @default(now())
+
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tenantId])
+  @@index([tagId])
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  tenantId  String
+  contactId String
+  type      String   // "page_view" | "form_submit" | "email_open" | "email_click" | "tag_added" | "automation_step" | "note"
+  payload   String   @default("{}") // JSON
+  createdAt DateTime @default(now())
+
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contactId])
+  @@index([createdAt])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Email + Campaigns
+// ──────────────────────────────────────────────────────────────────────────────
+// CampaignStatus: "DRAFT" | "SCHEDULED" | "SENDING" | "SENT" | "FAILED"
+
+model Campaign {
+  id             String          @id @default(cuid())
+  tenantId       String
+  name           String
+  subject        String
+  fromName       String
+  fromEmail      String
+  replyTo        String?
+  bodyHtml       String          @default("")
+  bodyText       String?
+  status         String          @default("DRAFT")
+  segmentTagIds  String          @default("[]") // JSON array of Tag ids
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  // computed stats
+  recipients     Int             @default(0)
+  delivered      Int             @default(0)
+  opens          Int             @default(0)
+  clicks         Int             @default(0)
+  unsubscribes   Int             @default(0)
+  bounces        Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries     EmailDelivery[]
+
+  @@index([tenantId])
+}
+
+model EmailMessage {
+  id          String   @id @default(cuid())
+  tenantId    String
+  contactId   String?
+  subject     String
+  fromEmail   String
+  toEmail     String
+  bodyHtml    String
+  source      String   // "broadcast" | "automation" | "transactional"
+  sourceId    String?  // campaignId or automationId
+  status      String   @default("queued") // queued|sent|opened|clicked|bounced|failed
+  error       String?
+  sentAt      DateTime?
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contactId])
+}
+
+model EmailDelivery {
+  id          String   @id @default(cuid())
+  tenantId    String
+  campaignId  String
+  contactId   String
+  status      String   @default("queued") // queued|sent|opened|clicked|unsubscribed|bounced
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+  @@index([tenantId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Automations
+// ──────────────────────────────────────────────────────────────────────────────
+// AutomationTrigger: "FORM_SUBMITTED" | "TAG_ADDED" | "PAGE_VISITED" | "LINK_CLICKED"
+
+model Automation {
+  id          String            @id @default(cuid())
+  tenantId    String
+  name        String
+  trigger     String
+  triggerRef  String?           // formId | tagId | pageId | linkId
+  // Steps: ordered JSON list of { type: 'send_email'|'add_tag'|'remove_tag'|'wait', config: {...} }
+  stepsJson   String            @default("[]")
+  enabled     Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs        AutomationRun[]
+
+  @@index([tenantId])
+}
+
+model AutomationRun {
+  id           String     @id @default(cuid())
+  tenantId     String
+  automationId String
+  contactId    String
+  state        String     @default("running") // running|completed|failed
+  cursor       Int        @default(0)
+  log          String     @default("[]") // JSON array of step results
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Templates
+// ──────────────────────────────────────────────────────────────────────────────
+
+model Template {
+  id             String   @id @default(cuid())
+  tenantId       String?  // null = built-in / global template
+  name           String
+  description    String?
+  niche          String?
+  trafficSource  String?
+  funnelType     String?  // "lead_magnet" | "advertorial" | "webinar" | "review"
+  // Full funnel definition as JSON: { pages: [{ name, type, blocks: [...] }], ... }
+  payload        String
+  isBuiltIn      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([niche])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Domains
+// ──────────────────────────────────────────────────────────────────────────────
+// DomainStatus: "PENDING" | "VERIFIED" | "FAILED"
+
+model Domain {
+  id            String       @id @default(cuid())
+  tenantId      String
+  hostname      String       @unique
+  isPrimary     Boolean      @default(false)
+  status        String       @default("PENDING")
+  verifyToken   String       @default(cuid())
+  verifiedAt    DateTime?
+  createdAt     DateTime     @default(now())
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Offers + affiliate links
+// ──────────────────────────────────────────────────────────────────────────────
+
+model Offer {
+  id          String          @id @default(cuid())
+  tenantId    String
+  name        String
+  network     String?         // "ClickBank" | "Digistore24" | "Direct" | ...
+  payout      Float?
+  currency    String          @default("USD")
+  landingUrl  String
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  links       AffiliateLink[]
+
+  @@index([tenantId])
+}
+
+model AffiliateLink {
+  id        String   @id @default(cuid())
+  tenantId  String
+  offerId   String
+  slug      String   // /go/[slug]
+  target    String   // resolved URL (with tracking params)
+  utm       String   @default("{}") // JSON
+  clicks    Int      @default(0)
+  revenue   Float    @default(0)
+  createdAt DateTime @default(now())
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  offer     Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Analytics events
+// ──────────────────────────────────────────────────────────────────────────────
+
+model Event {
+  id         String   @id @default(cuid())
+  tenantId   String
+  type       String   // "page_view" | "form_submit" | "cta_click" | "go_click" | "email_open" | "email_click"
+  pageId     String?
+  funnelId   String?
+  contactId  String?
+  sessionId  String?
+  utmSource  String?
+  utmMedium  String?
+  utmCampaign String?
+  referrer   String?
+  userAgent  String?
+  ipHash     String?
+  revenue    Float?
+  payload    String   @default("{}") // JSON
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, type, createdAt])
+  @@index([pageId])
+  @@index([funnelId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Integrations (ClickBank, Digistore24, Meta CAPI, Google Ads, …)
+// ──────────────────────────────────────────────────────────────────────────────
+// IntegrationType: "clickbank" | "digistore24" | "meta_capi" | "google_ads" | "tiktok_events"
+// Credentials are AES-256-GCM encrypted at rest using ENCRYPTION_KEY env var.
+
+model Integration {
+  id              String   @id @default(cuid())
+  tenantId        String
+  type            String
+  label           String?
+  // Encrypted blob: { iv, ciphertext, tag } as JSON
+  credentials     String
+  // Public, non-sensitive config (e.g. webhook ref, account id)
+  config          String   @default("{}")
+  status          String   @default("ACTIVE") // ACTIVE | DISABLED | ERROR
+  lastEventAt     DateTime?
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([type])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Visitors + click IDs (for retargeting + ClickBank TID round-trip)
+// ──────────────────────────────────────────────────────────────────────────────
+
+model Visitor {
+  id          String   @id @default(cuid())
+  tenantId    String
+  cookieId    String   @unique  // first-party cookie set on /p/* render
+  contactId   String?  // stitched when they convert
+  // Ad click IDs — captured on first hit, sent back to CAPI on conversion
+  fbclid      String?
+  gclid       String?
+  ttclid      String?
+  msclkid     String?
+  // Last-touch UTM (overwrites — first-touch lives on Contact)
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  referrer    String?
+  userAgent   String?
+  country     String?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clickEvents ClickEvent[]
+
+  @@index([tenantId])
+  @@index([contactId])
+}
+
+// One row per /go/ click — used to resolve ClickBank INS callbacks back to the
+// originating visitor + contact via the TID we inject in the affiliate URL.
+model ClickEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tid         String   @unique // short opaque ID — what we pass as ?tid= to the network
+  visitorId   String?
+  contactId   String?
+  linkId      String   // AffiliateLink id
+  offerId     String
+  utmJson     String   @default("{}")
+  createdAt   DateTime @default(now())
+
+  visitor     Visitor? @relation(fields: [visitorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([visitorId])
+  @@index([contactId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Audit
+// ──────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  tenantId     String?  // null = platform-level (superadmin)
+  actorUserId  String?
+  action       String   // "tenant.create" | "page.publish" | "contact.delete" | ...
+  resourceType String?
+  resourceId   String?
+  before       String?  // JSON
+  after        String?  // JSON
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actor        User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([actorUserId])
+  @@index([createdAt])
+}

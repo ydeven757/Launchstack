@@ -1,0 +1,57 @@
+# Launchstack production-style compose for a VPS.
+#
+# Usage:
+#   1. cp .env.production.example .env.production
+#   2. Edit .env.production — set strong NEXTAUTH_SECRET, ENCRYPTION_KEY, DB password
+#   3. ./scripts/use-postgres.sh                # swap prisma provider to postgresql
+#   4. docker compose --env-file .env.production up -d --build
+#   5. docker compose exec app npx prisma db seed   # one-time, optional
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-launchstack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:-launchstack}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:5432:5432"   # bind to loopback only — reverse-proxy doesn't need this exposed
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-launchstack}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-launchstack}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:?set in .env.production}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set in .env.production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set in .env.production — generate with: openssl rand -hex 32}
+      APP_BASE_DOMAIN: ${APP_BASE_DOMAIN:?set in .env.production}
+      APP_PROTOCOL: ${APP_PROTOCOL:-https}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@launchstack.app}
+      DEFAULT_FROM_NAME: ${DEFAULT_FROM_NAME:-Launchstack}
+      RUN_MIGRATIONS: "1"
+      RUN_SEED: ${RUN_SEED:-0}
+    ports:
+      - "127.0.0.1:3000:3000"   # behind Caddy/nginx on the host
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  db-data:
