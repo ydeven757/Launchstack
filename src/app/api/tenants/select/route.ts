@@ -18,26 +18,32 @@ export async function GET(req: NextRequest) {
   const next = url.searchParams.get("next") ?? "/app";
 
   const user = await getCurrentUser();
+  // Build absolute URL from the inbound Host header (Caddy passes it) so
+  // redirects don't leak the internal docker bind address.
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || process.env.APP_BASE_DOMAIN || "";
+  const proto = req.headers.get("x-forwarded-proto") || process.env.APP_PROTOCOL || "https";
+  const base = host ? `${proto}://${host}` : req.url;
+
   if (!user) {
-    return NextResponse.redirect(new URL(`/login?callbackUrl=${encodeURIComponent(next)}`, req.url), 307);
+    return NextResponse.redirect(new URL(`/login?callbackUrl=${encodeURIComponent(next)}`, base), 307);
   }
 
   const tenant = await prisma.tenant.findFirst({
     where: id ? { id } : slug ? { slug } : { id: "__none__" },
   });
-  if (!tenant) return NextResponse.redirect(new URL("/app", req.url), 307);
+  if (!tenant) return NextResponse.redirect(new URL("/app", base), 307);
 
   const membership = await prisma.membership.findUnique({
     where: { userId_tenantId: { userId: user.id, tenantId: tenant.id } },
   });
   if (!membership && !user.isSuperAdmin) {
-    return NextResponse.redirect(new URL("/app", req.url), 307);
+    return NextResponse.redirect(new URL("/app", base), 307);
   }
 
   // Resolve next URL — only allow internal paths
   const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : `/t/${tenant.slug}`;
 
-  const res = NextResponse.redirect(new URL(safeNext, req.url), 307);
+  const res = NextResponse.redirect(new URL(safeNext, base), 307);
   res.cookies.set(ACTIVE_TENANT_COOKIE, tenant.id, {
     httpOnly: true,
     sameSite: "lax",
