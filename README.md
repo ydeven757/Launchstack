@@ -1,5 +1,11 @@
 # Launchstack
 
+[![CI](https://github.com/findgriff/Launchstack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/findgriff/Launchstack/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/findgriff/Launchstack)](https://github.com/findgriff/Launchstack/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
+[![Prisma](https://img.shields.io/badge/Prisma-5-2D3748)](https://www.prisma.io/)
+
 Multi-tenant affiliate marketing operating system — funnels, pages, CRM, email broadcasts, visual automations, **A/B testing**, **AI copywriting**, **marketplace browse**, **ClickBank webhook integration**, custom domains.
 One master account, many isolated workspaces — designed for operators running multiple niche affiliate sites in parallel.
 
