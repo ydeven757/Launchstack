@@ -1,0 +1,15 @@
+{
+  "version": "1.23.0",
+  "notificationList": [],
+  "monitorList": [{
+    "name": "Launchstack production",
+    "url": "https://launchstack.opspocket.com/api/health",
+    "type": "keyword",
+    "keyword": "\"ok\":true",
+    "interval": 120,
+    "retryInterval": 60,
+    "maxretries": 2,
+    "timeout": 10,
+    "accepted_statuscodes": ["200"]
+  }]
+}

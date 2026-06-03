@@ -21,6 +21,19 @@ function randomCookieId(len = 24): string {
  * Dashboard + admin routes do not need this.
  */
 export function middleware(req: NextRequest) {
+  const url = req.nextUrl;
+
+  // For tenant-scoped dashboard routes, expose the full pathname to the layout
+  // (Server Components can't read the URL directly in Next 14). The layout
+  // uses this to redirect to /api/tenants/select with the correct deep `next`.
+  if (url.pathname.startsWith("/t/")) {
+    const res = NextResponse.next();
+    res.headers.set("x-ls-pathname", url.pathname + url.search);
+    return res;
+  }
+
+  // Public surface gets a visitor cookie seeded here (Server Components
+  // can't set cookies).
   const existing = req.cookies.get(VISITOR_COOKIE)?.value;
   if (existing) return NextResponse.next();
 
@@ -33,12 +46,10 @@ export function middleware(req: NextRequest) {
     maxAge: 60 * 60 * 24 * 365 * 2,
     secure: process.env.NODE_ENV === "production",
   });
-  // Forward to the route as if the cookie already existed — important so the
-  // server component sees it on first render via cookies().get()
   res.headers.set("x-ls-fresh-vid", newId);
   return res;
 }
 
 export const config = {
-  matcher: ["/p/:path*", "/go/:path*"],
+  matcher: ["/p/:path*", "/go/:path*", "/t/:path*"],
 };

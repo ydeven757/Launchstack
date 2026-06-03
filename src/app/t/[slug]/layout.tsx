@@ -1,5 +1,5 @@
 import { redirect, notFound } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { prisma } from "@/server/db";
 import { getCurrentUser } from "@/server/auth";
 import { ACTIVE_TENANT_COOKIE } from "@/server/tenant";
@@ -27,10 +27,13 @@ export default async function TenantLayout({
 
   // Make sure the active-tenant cookie matches this slug. Server Components
   // can't write cookies, so we route through /api/tenants/select which sets
-  // the cookie on the response and redirects back here.
+  // the cookie on the response and redirects back here. Preserve the original
+  // deep URL via the x-ls-pathname header set by middleware.ts.
   const c = cookies();
   if (c.get(ACTIVE_TENANT_COOKIE)?.value !== tenant.id) {
-    redirect(`/api/tenants/select?id=${tenant.id}&next=${encodeURIComponent(`/t/${tenant.slug}`)}`);
+    const h = headers();
+    const originalPath = h.get("x-ls-pathname") ?? `/t/${tenant.slug}`;
+    redirect(`/api/tenants/select?id=${tenant.id}&next=${encodeURIComponent(originalPath)}`);
   }
 
   const userTenants = await prisma.tenant.findMany({
