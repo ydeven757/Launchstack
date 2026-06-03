@@ -17,10 +17,16 @@ openssl rand -hex 32   # → ENCRYPTION_KEY
 openssl rand -hex 32   # → NEXTAUTH_SECRET
 
 # Switch Prisma to Postgres for production
-./scripts/use-postgres.sh
+# NOTE: scripts/use-postgres.sh has an early-exit grep that can false-positive
+# on the comment block in schema.prisma. If it says "already on postgresql"
+# but `grep -A2 "^datasource db" prisma/schema.prisma` still shows sqlite,
+# force it manually:
+sed -i.bak '/^datasource db {/,/^}/ s/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
 
-# Regenerate migration set for Postgres in a clean db (LOCAL test first)
-# Optional but recommended: spin up local Postgres, run migrate dev, validate
+# OPTIONAL: regenerate migrations against a local Postgres. Otherwise the
+# container entrypoint will fall back to `prisma db push` on first boot,
+# which syncs the schema without migration history. Recommended for the
+# initial deploy; switch to `migrate dev` + commit migrations afterward.
 ```
 
 ## 2. VPS bootstrap (one-time, on the VPS)
@@ -50,19 +56,41 @@ nano .env.production        # paste the secrets you generated; set NEXTAUTH_URL 
 docker compose --env-file .env.production up -d --build
 
 # First-time only: seed demo accounts (skip in production)
-docker compose exec app npx prisma db seed
+# Note: the runtime image is slim and does not ship `tsx` (the seed runner).
+# Run the seed in a fresh node container attached to the same Docker network:
+NETWORK=$(docker inspect launchstack-app-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run --rm \
+  --network "$NETWORK" \
+  -v /opt/launchstack:/workspace:ro \
+  -w /tmp/seed \
+  -e "DATABASE_URL=postgres://launchstack:${POSTGRES_PASSWORD}@db:5432/launchstack" \
+  node:22-alpine \
+  sh -c 'cp -r /workspace/prisma /workspace/src /workspace/package.json /workspace/tsconfig.json .; \
+         npm install --silent --no-audit --no-fund && \
+         npx -y -p prisma@5.22.0 prisma generate && \
+         npx tsx prisma/seed.ts'
 ```
 
 After `docker compose up`, the app listens on `127.0.0.1:3000` — not exposed publicly until the reverse proxy is configured.
 
 ## 3. Reverse proxy with Caddy (TLS auto-issued via Let's Encrypt)
 
-`/etc/caddy/Caddyfile`:
+A reference site file is in `infra/launchstack.caddy` — copy it to
+`/etc/caddy/Caddyfile.d/launchstack.caddy` (or paste inline in your main
+Caddyfile). Then:
 
 ```caddy
-app.example.com {
+launchstack.example.com {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    # Caddy auto-forwards X-Forwarded-* headers — no header_up needed
+    reverse_proxy 127.0.0.1:3100
 }
 
 # Wildcard for tenant subdomains (system fallback URLs like <tenant>.app.example.com)

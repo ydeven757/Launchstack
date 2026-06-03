@@ -60,7 +60,8 @@ const matrix: Record<Action, Role[]> = {
 };
 
 export function can(role: Role, action: Action): boolean {
-  return matrix[action].includes(role);
+  // Defensive: an action not in the matrix is denied (fail-closed), never throws
+  return matrix[action]?.includes(role) ?? false;
 }
 
 export function requirePermission(role: Role, action: Action): void {

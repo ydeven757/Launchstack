@@ -6,6 +6,7 @@ import { triggerAutomations } from "@/server/services/automation-engine";
 import { getCurrentVisitor, stitchVisitorToContact, VISITOR_COOKIE } from "@/server/services/visitor";
 import { rateLimit } from "@/server/rate-limit";
 import { resolvePageForVisitor } from "@/server/services/ab";
+import { isSuppressed } from "@/server/actions/privacy";
 import { cookies } from "next/headers";
 
 export async function POST(req: NextRequest) {
@@ -52,6 +53,12 @@ export async function POST(req: NextRequest) {
   }
 
   const db = tenantDb(page.tenantId);
+
+  // GDPR/CCPA suppression — if this email was previously erased, return success
+  // but do NOT recreate the contact. The subject explicitly asked to be removed.
+  if (await isSuppressed(page.tenantId, parsed.data.email)) {
+    return NextResponse.json({ ok: true, suppressed: true });
+  }
 
   // Upsert contact (idempotent by email per tenant)
   const existing = await db.contact.findFirst({ where: { email: parsed.data.email } });

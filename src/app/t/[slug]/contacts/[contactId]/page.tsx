@@ -8,6 +8,7 @@ import { requireTenant, tenantDb } from "@/server/tenant";
 import { updateContactAction, deleteContactAction } from "@/server/actions/contacts";
 import { TagAssign } from "./tag-assign";
 import { DeleteContactButton } from "./delete-button";
+import { PrivacyActions } from "./privacy-actions";
 
 export default async function ContactDetail({ params }: { params: { slug: string; contactId: string } }) {
   const { slug, contactId } = params;
@@ -31,7 +32,10 @@ export default async function ContactDetail({ params }: { params: { slug: string
           <Link href={`/t/${slug}/contacts`} className="text-sm text-muted hover:text-fg">← All contacts</Link>
           <h1 className="text-2xl font-semibold mt-2">{contact.email}</h1>
         </div>
-        <DeleteContactButton action={del} />
+        <div className="flex flex-col gap-2 items-end">
+          <DeleteContactButton action={del} />
+          <PrivacyActions contactId={contactId} contactEmail={contact.email} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

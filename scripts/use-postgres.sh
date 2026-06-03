@@ -11,12 +11,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if grep -q 'provider = "postgresql"' prisma/schema.prisma; then
+# Check the ACTIVE provider — not just any mention of "postgresql" in comments.
+ACTIVE_PROVIDER=$(awk '/^datasource db {/,/^}/' prisma/schema.prisma | grep -oE 'provider = "[a-z]+"' | head -1)
+
+if [[ "$ACTIVE_PROVIDER" == 'provider = "postgresql"' ]]; then
   echo "schema.prisma is already on postgresql"
   exit 0
 fi
 
-# macOS sed vs GNU sed: use a perl one-liner for portability
-perl -i -pe 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
-echo "schema.prisma → postgresql"
+# Only rewrite the provider line inside the datasource db block, not comments.
+perl -i -pe 'BEGIN{$in=0} if (/^datasource db {/){$in=1} elsif (/^}/){$in=0} elsif ($in){s/provider = "sqlite"/provider = "postgresql"/}' prisma/schema.prisma
+
+NEW=$(awk '/^datasource db {/,/^}/' prisma/schema.prisma | grep -oE 'provider = "[a-z]+"' | head -1)
+echo "schema.prisma → $NEW"
 echo "Next: set DATABASE_URL=postgres://... and run: npx prisma migrate deploy"

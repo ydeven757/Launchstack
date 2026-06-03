@@ -1,0 +1,28 @@
+# ── Launchstack — reference Caddy site config ───────────────────────
+#
+# Copy to /etc/caddy/Caddyfile.d/launchstack.caddy on the host, then
+# either `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`
+# + `systemctl reload caddy`, or use the admin API:
+#   caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+#
+# Replace the hostname below with your own. TLS is provisioned automatically
+# via Let's Encrypt (HTTP-01 by default; DNS-01 if you already use Cloudflare).
+#
+# Reverse-proxies to the docker-compose stack on 127.0.0.1:3100 (override the
+# default 3000 port via docker-compose.override.yml if needed).
+
+launchstack.example.com {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # Caddy automatically forwards X-Forwarded-* to upstreams — no explicit
+    # header_up needed (would emit "Unnecessary header_up" warnings).
+    reverse_proxy 127.0.0.1:3100
+}

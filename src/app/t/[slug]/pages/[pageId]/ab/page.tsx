@@ -7,6 +7,7 @@ import { requireTenant, tenantDb } from "@/server/tenant";
 import { variantPerformance } from "@/server/services/ab";
 import { ABControls, DeclareWinnerButton } from "./controls";
 import { formatNumber, pct } from "@/lib/utils";
+import { compareVariants } from "@/lib/stats";
 
 export default async function ABTestingPage({ params }: { params: { slug: string; pageId: string } }) {
   const { slug, pageId } = params;
@@ -62,6 +63,44 @@ export default async function ABTestingPage({ params }: { params: { slug: string
               </CardContent>
             </Card>
           ))}
+
+          {/* Statistical significance — control vs each treatment */}
+          {perf.length >= 2 && (() => {
+            const control = perf.find((p) => p.isControl) ?? perf[0];
+            const treatments = perf.filter((p) => p.variantId !== control.variantId);
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Significance vs Control</CardTitle>
+                  <CardDescription>Two-proportion z-test (95% confidence). Aim for ≥ 100 visits per variant before trusting the result.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {treatments.map((t) => {
+                    const cmp = compareVariants(
+                      { visits: control.visits, conversions: control.submits },
+                      { visits: t.visits, conversions: t.submits },
+                    );
+                    const sigVariant = cmp.isSignificant ? (cmp.liftPct > 0 ? "success" : "danger") : "secondary";
+                    const sigLabel = cmp.isSignificant
+                      ? (cmp.liftPct > 0 ? `WINNER  +${(cmp.liftPct * 100).toFixed(1)}%` : `LOSER  ${(cmp.liftPct * 100).toFixed(1)}%`)
+                      : "NOT YET SIGNIFICANT";
+                    return (
+                      <div key={t.variantId} className="flex items-center gap-3 text-sm border-t first:border-0 border-border py-2">
+                        <span className="font-medium min-w-[160px] truncate">{t.name}</span>
+                        <Badge variant={sigVariant}>{sigLabel}</Badge>
+                        <div className="text-xs text-muted flex-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                          <span>p = <span className="font-mono">{cmp.pValue.toFixed(4)}</span></span>
+                          <span>z = <span className="font-mono">{cmp.zScore.toFixed(2)}</span></span>
+                          <span>95% CI on diff: <span className="font-mono">[{(cmp.ci95[0]*100).toFixed(2)}%, {(cmp.ci95[1]*100).toFixed(2)}%]</span></span>
+                        </div>
+                        {cmp.warning && <span className="text-xs text-warning">⚠ {cmp.warning}</span>}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })()}
         </div>
       )}
 

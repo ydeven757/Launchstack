@@ -1,8 +1,11 @@
 import "server-only";
-import { createHash } from "node:crypto";
 import { prisma } from "../db";
 import type { Block } from "@/components/builder/block-renderer";
 import { safeJsonParse } from "@/lib/utils";
+import { pickVariant } from "@/lib/ab-picker";
+
+// Re-export so existing callers (and the test file) can still find it here
+export { pickVariant };
 
 export type ResolvedPage = {
   pageId: string;
@@ -47,21 +50,6 @@ export async function resolvePageForVisitor(input: {
     variantName: null,
     blocks: safeJsonParse<Block[]>(page.publishedBlocks ?? page.blocksJson, []),
   };
-}
-
-function pickVariant<T extends { id: string; weight: number }>(variants: T[], seed: string): T {
-  const totalWeight = variants.reduce((acc, v) => acc + Math.max(0, v.weight), 0);
-  if (totalWeight === 0) return variants[0];
-  const hash = createHash("sha256").update(seed).digest();
-  // Use first 4 bytes of hash as deterministic 0-1
-  const intVal = hash.readUInt32BE(0);
-  const r = (intVal / 0xffffffff) * totalWeight;
-  let acc = 0;
-  for (const v of variants) {
-    acc += Math.max(0, v.weight);
-    if (r <= acc) return v;
-  }
-  return variants[variants.length - 1];
 }
 
 export async function variantPerformance(pageId: string) {

@@ -122,6 +122,7 @@ model Tenant {
   visitors        Visitor[]
   pageVariants    PageVariant[]
   pageVersions    PageVersion[]
+  suppressions    Suppression[]
   auditEntries    AuditLog[]
 }
 
@@ -655,6 +656,26 @@ model ClickEvent {
   @@index([tenantId])
   @@index([visitorId])
   @@index([contactId])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Suppression list — GDPR/CCPA right-to-erasure compliance
+// ──────────────────────────────────────────────────────────────────────────────
+// When a contact is erased, their email is hashed (SHA-256) and added here so
+// future form submissions / imports don't silently re-create the contact.
+// We never store the plaintext email after erasure.
+
+model Suppression {
+  id          String   @id @default(cuid())
+  tenantId    String
+  emailHash   String   // sha256 of lowercased email
+  reason      String   // "erasure" | "unsubscribe" | "bounce" | "complaint"
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, emailHash])
+  @@index([tenantId])
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

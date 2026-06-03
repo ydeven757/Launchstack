@@ -19,6 +19,7 @@ export default async function EditPagePage({ params }: { params: { slug: string;
       <div className="flex items-center justify-between">
         <Link href={backHref} className="text-sm text-muted hover:text-fg">← Back</Link>
         <div className="flex items-center gap-3 text-sm">
+          <Link href={`/t/${slug}/pages/${page.id}/versions`} className="text-muted hover:text-fg">Versions</Link>
           <Link href={`/t/${slug}/pages/${page.id}/ab`} className="text-muted hover:text-fg">A/B test{page.abEnabled ? " (ON)" : ""}</Link>
           <a href={`/p/${ctx.tenant.slug}/${page.slug}`} target="_blank" rel="noopener noreferrer" className="text-muted hover:text-fg">
             Open public URL ↗

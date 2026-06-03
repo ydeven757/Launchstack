@@ -16,10 +16,14 @@ export default async function MarketplacePage({ searchParams }: { searchParams: 
     where: {
       active: true,
       ...(searchParams.niche ? { niche: searchParams.niche } : {}),
+      // mode: 'insensitive' is required on Postgres for case-insensitive matching.
+      // SQLite ignores `mode` and is already case-insensitive on `contains`,
+      // so this works for both providers. Cast through unknown because the
+      // SQLite generated client doesn't type `mode` — Postgres does.
       ...(searchParams.q
         ? { OR: [
-            { title: { contains: searchParams.q } },
-            { description: { contains: searchParams.q } },
+            { title: { contains: searchParams.q, mode: "insensitive" } as unknown as { contains: string } },
+            { description: { contains: searchParams.q, mode: "insensitive" } as unknown as { contains: string } },
           ] }
         : {}),
     },

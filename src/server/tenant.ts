@@ -33,6 +33,7 @@ export const TENANT_SCOPED_MODELS = new Set([
   "ClickEvent",
   "PageVariant",
   "PageVersion",
+  "Suppression",
   // NOTE: MarketplaceProduct is intentionally NOT tenant-scoped — global catalog
 ]);
 
