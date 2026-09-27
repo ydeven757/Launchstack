@@ -1,11 +1,20 @@
 import "server-only";
+import {
+  getPaperclipConfig,
+  dispatchCopyTask,
+  pollForResult,
+  parseVariations,
+} from "./paperclip-client";
 
 /**
  * AI copywriting service.
  *
- * If ANTHROPIC_API_KEY is set, calls Claude with prompt caching on the system prompt
- * so repeated calls in a session are cheap. Otherwise uses deterministic
- * template-based fallback so the UI still works in dev / offline.
+ * Resolution order (first available wins):
+ *   1. Paperclip — a dedicated "Copywriter" agent in a Paperclip company powers
+ *      the copy. This is the primary AI engine when configured.
+ *   2. Anthropic — direct Claude call with prompt caching on the system prompt.
+ *   3. Fallback — deterministic template-based output so the UI still works in
+ *      dev / offline with no AI key at all.
  */
 
 export type AICopyKind =
@@ -37,7 +46,7 @@ export type AICopyInput = {
 
 export type AICopyResult = {
   variations: string[];
-  source: "anthropic" | "fallback";
+  source: "paperclip" | "anthropic" | "fallback";
   cached?: boolean;
 };
 
@@ -149,23 +158,7 @@ async function callAnthropic(input: AICopyInput): Promise<string[]> {
   const budget = BUDGETS[input.kind];
   const n = input.variations ?? 3;
 
-  const userPrompt = [
-    `Generate ${n} ${input.kind} variations.`,
-    `Output format: one variation per response chunk separated by '---' lines.`,
-    `Constraints: ${budget.instructions}`,
-    "",
-    "Context:",
-    `- Niche: ${input.context.niche ?? "(unspecified)"}`,
-    `- Audience: ${input.context.audience ?? "(unspecified)"}`,
-    `- Offer / promise: ${input.context.offer ?? "(unspecified)"}`,
-    `- Tone: ${input.context.tone ?? "direct"}`,
-    `- Traffic source: ${input.context.trafficSource ?? "(unspecified)"}`,
-    `- Page type: ${input.context.pageType ?? "(unspecified)"}`,
-    input.context.angle ? `- Angle hint: ${input.context.angle}` : "",
-    input.existing ? `\nCurrent text (rewrite, don't just tweak):\n"${input.existing}"` : "",
-    "",
-    `Now write the ${n} variations. Plain text. Separator '---' lines between variations. No commentary.`,
-  ].filter(Boolean).join("\n");
+  const userPrompt = buildUserPrompt(input, n);
 
   // Prompt caching: keep the system prompt cacheable across calls
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -189,10 +182,70 @@ async function callAnthropic(input: AICopyInput): Promise<string[]> {
   const data = (await res.json()) as { content?: { type: string; text?: string }[] };
   const text = data.content?.find((c) => c.type === "text")?.text ?? "";
 
-  return text.split(/\n---+\n/).map((s) => s.trim()).filter(Boolean).slice(0, n);
+  return text.split(/\n---+[\r\n]+/).map((s) => s.trim()).filter(Boolean).slice(0, n);
+}
+
+/**
+ * Build the shared user prompt used by both the Anthropic and Paperclip paths.
+ * The Paperclip agent receives this as its issue description.
+ */
+function buildUserPrompt(input: AICopyInput, n: number): string {
+  const budget = BUDGETS[input.kind];
+  return [
+    `Generate ${n} ${input.kind} variations.`,
+    `Output format: one variation per response chunk separated by '---' lines.`,
+    `Constraints: ${budget.instructions}`,
+    "",
+    "Context:",
+    `- Niche: ${input.context.niche ?? "(unspecified)"}`,
+    `- Audience: ${input.context.audience ?? "(unspecified)"}`,
+    `- Offer / promise: ${input.context.offer ?? "(unspecified)"}`,
+    `- Tone: ${input.context.tone ?? "direct"}`,
+    `- Traffic source: ${input.context.trafficSource ?? "(unspecified)"}`,
+    `- Page type: ${input.context.pageType ?? "(unspecified)"}`,
+    input.context.angle ? `- Angle hint: ${input.context.angle}` : "",
+    input.existing ? `\nCurrent text (rewrite, don't just tweak):\n"${input.existing}"` : "",
+    "",
+    `Now write the ${n} variations. Plain text. Separator '---' lines between variations. No commentary.`,
+  ].filter(Boolean).join("\n");
+}
+
+/**
+ * Dispatch the copy request to the Paperclip copywriter agent and poll for the
+ * result. Returns the parsed variations, or throws if the agent didn't finish.
+ */
+async function callPaperclip(input: AICopyInput): Promise<string[]> {
+  const cfg = getPaperclipConfig();
+  if (!cfg) throw new Error("Paperclip not configured");
+
+  const n = input.variations ?? 3;
+  const prompt = [
+    SYSTEM_PROMPT,
+    "",
+    "TASK:",
+    buildUserPrompt(input, n),
+    "",
+    "When done, save your result (the variations, separated by '---' lines, plain text, no commentary) as a document with key `copy-result` on this issue, then mark the issue done.",
+  ].join("\n");
+
+  const issueId = await dispatchCopyTask(cfg, prompt);
+  const body = await pollForResult(cfg, issueId);
+  if (body == null) throw new Error("Paperclip copywriter did not finish in time");
+  return parseVariations(body).slice(0, n);
 }
 
 export async function generateCopy(input: AICopyInput): Promise<AICopyResult> {
+  // 1. Paperclip (primary AI engine)
+  try {
+    if (getPaperclipConfig()) {
+      const variations = await callPaperclip(input);
+      if (variations.length > 0) return { variations, source: "paperclip" };
+    }
+  } catch (e) {
+    console.warn("[ai-copy] Paperclip call failed — trying Anthropic:", (e as Error).message);
+  }
+
+  // 2. Anthropic (direct Claude)
   try {
     if (process.env.ANTHROPIC_API_KEY) {
       const variations = await callAnthropic(input);
@@ -201,5 +254,7 @@ export async function generateCopy(input: AICopyInput): Promise<AICopyResult> {
   } catch (e) {
     console.warn("[ai-copy] Anthropic call failed — using fallback:", (e as Error).message);
   }
+
+  // 3. Deterministic fallback (no AI key required)
   return { variations: fallbackVariations(input), source: "fallback" };
 }

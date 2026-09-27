@@ -27,7 +27,7 @@ export function AIAssist({
   const [tone, setTone] = useState<"direct" | "story" | "punchy" | "professional">("direct");
   const [offer, setOffer] = useState(context?.offer ?? "");
   const [angle, setAngle] = useState(context?.angle ?? "");
-  const [source, setSource] = useState<"anthropic" | "fallback" | null>(null);
+  const [source, setSource] = useState<"paperclip" | "anthropic" | "fallback" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function run() {
@@ -103,7 +103,7 @@ export function AIAssist({
             </Button>
             {source && (
               <span className="text-[10px] text-muted">
-                {source === "anthropic" ? "via Claude" : "fallback (no key)"}
+                {source === "paperclip" ? "via Paperclip agent" : source === "anthropic" ? "via Claude" : "fallback (no key)"}
               </span>
             )}
           </div>
